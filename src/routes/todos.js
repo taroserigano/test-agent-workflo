@@ -7,8 +7,16 @@ const router = express.Router();
 let todos = [];
 let nextId = 1;
 
-// GET /todos — list all
-router.get("/", (_req, res) => {
+// GET /todos — list all (supports ?q= search)
+router.get("/", (req, res) => {
+  const { q } = req.query;
+  if (q && typeof q === "string") {
+    const query = q.toLowerCase();
+    const results = todos.filter((t) =>
+      t.title.toLowerCase().includes(query)
+    );
+    return res.json(results);
+  }
   res.json(todos);
 });
 

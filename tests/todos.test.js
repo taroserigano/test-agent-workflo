@@ -47,6 +47,23 @@ describe("GET /todos", () => {
     const res = await request(app).get("/todos");
     expect(res.body).toHaveLength(2);
   });
+
+  it("searches todos by query string", async () => {
+    await request(app).post("/todos").send({ title: "Buy milk" });
+    await request(app).post("/todos").send({ title: "Buy eggs" });
+    await request(app).post("/todos").send({ title: "Walk the dog" });
+    const res = await request(app).get("/todos?q=buy");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0].title).toBe("Buy milk");
+  });
+
+  it("returns empty array for no search match", async () => {
+    await request(app).post("/todos").send({ title: "Something" });
+    const res = await request(app).get("/todos?q=xyz");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
 });
 
 describe("GET /todos/:id", () => {
