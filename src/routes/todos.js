@@ -7,13 +7,21 @@ const router = express.Router();
 let todos = [];
 let nextId = 1;
 
-// GET /todos — list all
-router.get("/", (_req, res) => {
+// GET /todos — list all (supports ?q= search)
+router.get("/", (req, res) => {
+  const { q } = req.query;
+  if (q && typeof q === "string") {
+    const query = q.toLowerCase();
+    const results = todos.filter((t) =>
+      t.title.toLowerCase().includes(query)
+    );
+    return res.json(results);
+  }
   res.json(todos);
 });
 
 // GET /todos/:id — get one
-router.get("/:id", (req, res) => {
+router.get('/:id', (req, res) => {
   const todo = todos.find((t) => t.id === parseInt(req.params.id));
   if (!todo) return res.status(404).json({ error: "Todo not found" });
   res.json(todo);
@@ -38,7 +46,7 @@ router.post("/", (req, res) => {
 });
 
 // PATCH /todos/:id — update
-router.patch("/:id", (req, res) => {
+router.patch('/:id', (req, res) => {
   const todo = todos.find((t) => t.id === parseInt(req.params.id));
   if (!todo) return res.status(404).json({ error: "Todo not found" });
 
@@ -62,7 +70,7 @@ router.patch("/:id", (req, res) => {
 });
 
 // DELETE /todos/:id — delete
-router.delete("/:id", (req, res) => {
+router.delete('/:id', (req, res) => {
   const index = todos.findIndex((t) => t.id === parseInt(req.params.id));
   if (index === -1) return res.status(404).json({ error: "Todo not found" });
   todos.splice(index, 1);

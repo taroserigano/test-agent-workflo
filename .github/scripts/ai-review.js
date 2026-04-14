@@ -295,16 +295,30 @@ async function main() {
 
   // --------------- Output for workflow ---------------
 
-  // Write outputs for the workflow to read
   const fs = require('fs');
+
+  // Write findings JSON for the fix agent to consume
+  const blockingFindings = critique.findings.filter(
+    (f) => ['critical', 'high', 'medium'].includes(f.severity)
+  );
+  fs.writeFileSync('findings.json', JSON.stringify({
+    verdict: critique.verdict,
+    confidence: critique.confidence,
+    findings: blockingFindings,
+    allFindings: critique.findings,
+  }, null, 2));
+  console.log(`Wrote ${blockingFindings.length} blocking findings to findings.json`);
+
+  // Write outputs for the workflow to read
   const outputFile = process.env.GITHUB_OUTPUT;
   if (outputFile) {
     fs.appendFileSync(outputFile, `verdict=${critique.verdict}\n`);
     fs.appendFileSync(outputFile, `confidence=${critique.confidence}\n`);
     fs.appendFileSync(outputFile, `auto_merge_eligible=${autoMergeEligible}\n`);
+    fs.appendFileSync(outputFile, `has_blocking_findings=${blockingFindings.length > 0}\n`);
   }
 
-  console.log(`Verdict: ${critique.verdict} | Confidence: ${critique.confidence}% | Auto-merge eligible: ${autoMergeEligible}`);
+  console.log(`Verdict: ${critique.verdict} | Confidence: ${critique.confidence}% | Auto-merge eligible: ${autoMergeEligible} | Blocking findings: ${blockingFindings.length}`);
 }
 
 main().catch((err) => {
