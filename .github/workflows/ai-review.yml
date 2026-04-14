@@ -1,0 +1,92 @@
+name: AI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  # Modes: "observer" (comment only), "suggest" (recommend merge), "auto" (merge after human gate)
+  REVIEW_MODE: auto
+
+jobs:
+  ai-review:
+    name: Multi-Agent AI Review
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.review.outputs.verdict }}
+      confidence: ${{ steps.review.outputs.confidence }}
+      auto_merge_eligible: ${{ steps.review.outputs.auto_merge_eligible }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt 2>/dev/null || echo "no diff" > pr_diff.txt
+          LINES_CHANGED=$(wc -l < pr_diff.txt)
+          echo "lines_changed=$LINES_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Run AI Review Agents
+        id: review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_DIFF: ${{ github.event.pull_request.diff_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          LINES_CHANGED: ${{ steps.diff.outputs.lines_changed }}
+          REVIEW_MODE: ${{ env.REVIEW_MODE }}
+        run: |
+          # Read the diff from file instead of URL
+          export PR_DIFF="$(cat pr_diff.txt)"
+          node .github/scripts/ai-review.js
+
+  # ---- Human Approval Gate ----
+  # This job only runs if AI says PASS and mode is "auto"
+  # Requires a GitHub Environment "production" with required reviewers configured
+  human-gate:
+    name: Human Approval
+    needs: ai-review
+    if: needs.ai-review.outputs.auto_merge_eligible == 'true'
+    runs-on: ubuntu-latest
+    environment: production   # <-- Configure required reviewers in repo Settings > Environments
+    steps:
+      - name: Approval received
+        run: echo "Human approved the merge"
+
+  # ---- Auto-merge after human approval ----
+  merge:
+    name: Merge PR
+    needs: [ai-review, human-gate]
+    if: needs.ai-review.outputs.auto_merge_eligible == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Merge Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --squash \
+            --auto

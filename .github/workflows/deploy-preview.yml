@@ -1,0 +1,84 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  smoke-test:
+    name: API Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start server & run smoke test
+        id: smoke
+        run: |
+          node src/app.js &
+          SERVER_PID=$!
+          sleep 2
+
+          # Health check
+          HEALTH=$(curl -sf http://localhost:3000/health || echo "FAIL")
+
+          # Create a todo
+          CREATE=$(curl -sf -X POST http://localhost:3000/todos \
+            -H "Content-Type: application/json" \
+            -d '{"title":"smoke test"}' || echo "FAIL")
+
+          # List todos
+          LIST=$(curl -sf http://localhost:3000/todos || echo "FAIL")
+
+          kill $SERVER_PID 2>/dev/null || true
+
+          if echo "$HEALTH" | grep -q "ok" && echo "$CREATE" | grep -q "smoke test" && echo "$LIST" | grep -q "smoke test"; then
+            echo "result=passed" >> "$GITHUB_OUTPUT"
+            echo "details=Health ✅ | Create ✅ | List ✅" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "details=Health: $HEALTH | Create: $CREATE | List: $LIST" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post result to PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const result = '${{ steps.smoke.outputs.result }}';
+            const details = `${{ steps.smoke.outputs.details }}`;
+            const emoji = result === 'passed' ? '✅' : '❌';
+
+            const body = [
+              `## ${emoji} Deploy Preview — Smoke Test ${result.toUpperCase()}`,
+              '',
+              '| Endpoint | Status |',
+              '|----------|--------|',
+              ...details.split(' | ').map(d => `| ${d.split(':')[0] || d} | ${d} |`),
+              '',
+              `_Tested against \`${context.sha.slice(0, 7)}\`_`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
+
+            if (result !== 'passed') {
+              core.setFailed('Smoke test failed');
+            }

@@ -1,0 +1,36 @@
+name: Stale Cleanup
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # Runs daily at midnight UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Close Stale Issues & PRs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Stale check
+        uses: actions/stale@v9
+        with:
+          stale-issue-message: >
+            This issue has been automatically marked as stale because it has not had
+            activity in the last 14 days. It will be closed in 7 days if no further
+            activity occurs. Remove the `stale` label to keep it open.
+          stale-pr-message: >
+            This PR has been automatically marked as stale because it has not had
+            activity in the last 14 days. It will be closed in 7 days if no further
+            activity occurs. Remove the `stale` label to keep it open.
+          close-issue-message: 'Closed due to inactivity. Reopen if still relevant.'
+          close-pr-message: 'Closed due to inactivity. Reopen if still relevant.'
+          days-before-stale: 14
+          days-before-close: 7
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: 'pinned,security,no-stale'
+          exempt-pr-labels: 'pinned,no-stale'
