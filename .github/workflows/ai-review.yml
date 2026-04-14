@@ -5,13 +5,14 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
 
 env:
   # Modes: "observer" (comment only), "suggest" (recommend merge), "auto" (merge after human gate)
   REVIEW_MODE: auto
+  MAX_FIX_ITERATIONS: 3
 
 jobs:
   ai-review:
@@ -21,6 +22,7 @@ jobs:
       verdict: ${{ steps.review.outputs.verdict }}
       confidence: ${{ steps.review.outputs.confidence }}
       auto_merge_eligible: ${{ steps.review.outputs.auto_merge_eligible }}
+      has_blocking_findings: ${{ steps.review.outputs.has_blocking_findings }}
 
     steps:
       - name: Checkout code
@@ -34,6 +36,21 @@ jobs:
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt 2>/dev/null || echo "no diff" > pr_diff.txt
           LINES_CHANGED=$(wc -l < pr_diff.txt)
           echo "lines_changed=$LINES_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Count fix iterations
+        id: iteration
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Count how many fix-agent commits exist on this PR
+          ITERATION=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --json commits \
+            --jq '[.commits[].messageHeadline | select(startswith("fix: auto-fix iteration"))] | length')
+          NEXT=$((ITERATION + 1))
+          echo "current=$ITERATION" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Fix iteration: $ITERATION (next would be $NEXT)"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -54,9 +71,84 @@ jobs:
           LINES_CHANGED: ${{ steps.diff.outputs.lines_changed }}
           REVIEW_MODE: ${{ env.REVIEW_MODE }}
         run: |
-          # Read the diff from file instead of URL
           export PR_DIFF="$(cat pr_diff.txt)"
           node .github/scripts/ai-review.js
+
+      - name: Upload findings artifact
+        if: steps.review.outputs.has_blocking_findings == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-findings
+          path: findings.json
+          retention-days: 1
+
+  # ---- Fix Agent (self-healing loop) ----
+  fix-agent:
+    name: Fix Agent
+    needs: ai-review
+    if: |
+      needs.ai-review.outputs.has_blocking_findings == 'true' &&
+      needs.ai-review.outputs.verdict != 'PASS'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download findings
+        uses: actions/download-artifact@v4
+        with:
+          name: review-findings
+
+      - name: Get fix iteration count
+        id: iteration
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ITERATION=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --json commits \
+            --jq '[.commits[].messageHeadline | select(startswith("fix: auto-fix iteration"))] | length')
+          NEXT=$((ITERATION + 1))
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Fix iteration will be: $NEXT"
+
+      - name: Check iteration limit
+        id: limit
+        run: |
+          if [ "${{ steps.iteration.outputs.next }}" -gt "${{ env.MAX_FIX_ITERATIONS }}" ]; then
+            echo "exceeded=true" >> "$GITHUB_OUTPUT"
+            echo "Max fix iterations reached"
+          else
+            echo "exceeded=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.limit.outputs.exceeded == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Configure git
+        if: steps.limit.outputs.exceeded == 'false'
+        run: |
+          git config user.name "fix-agent[bot]"
+          git config user.email "fix-agent[bot]@users.noreply.github.com"
+
+      - name: Run Fix Agent
+        if: steps.limit.outputs.exceeded == 'false'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          FIX_ITERATION: ${{ steps.iteration.outputs.next }}
+        run: node .github/scripts/fix-agent.js
 
   # ---- Human Approval Gate ----
   # This job only runs if AI says PASS and mode is "auto"
