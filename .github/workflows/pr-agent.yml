@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0
 
       - name: Auto-label and post PR summary
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
